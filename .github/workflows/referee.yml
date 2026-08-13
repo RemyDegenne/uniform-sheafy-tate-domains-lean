@@ -40,6 +40,10 @@ env:
   # The site title, which otherwise defaults to the root module name — guillemets and all.
   REFEREE_TITLE: Uniform sheafy Tate rings that are not stably uniform
 
+  # Whether to render interactive Lean into the code blocks. By far the most expensive phase of
+  # this job, and worth almost nothing in bytes — see the highlight step for the measurements.
+  REFEREE_HIGHLIGHT: "true"
+
   # Generated data, deliberately *outside* the working tree. `provenance` records whether the tree
   # was clean when it folded, via `git status --porcelain`, which counts untracked files — so
   # leaving these where they land would permanently stamp the ledger as built from a dirty tree and
@@ -70,9 +74,11 @@ jobs:
   referee:
     runs-on: ubuntu-latest
     name: Build and deploy the referee website
-    # A GitHub-hosted runner has six hours per job. This library is 220k lines over 400 files, so
-    # the build is the expensive part and the highlight phase below is sized around what is left.
-    timeout-minutes: 350
+    # Measured on a 32-core workstation against this library at 97cdc6d: `collect` 7m30s (serial),
+    # `extract` 11s, `highlight` 54 minutes of CPU over 257 modules, `build-site` 1m10s. The runner
+    # has four cores rather than thirty-two, so the highlight phase dominates, and this bound is
+    # here to notice a run heading for the six-hour job limit before GitHub kills it unlabelled.
+    timeout-minutes: 330
     environment:
       name: github-pages
       url: ${{ steps.deployment.outputs.page_url }}
@@ -277,7 +283,37 @@ jobs:
           [ -n "$found" ] || { echo "artifact holds no JSON; skipping the baseline"; exit 0; }
           echo "REFEREE_BASELINE=$found" >> "$GITHUB_ENV"
 
-      - name: Build the referee site
+      # The standalone minimal `.lean` file behind each declaration: one process, ~10 seconds, and
+      # 23 MB of the published site. `highlight-extracted` — which re-elaborates every one of those
+      # files to render it inline — is deliberately never run: it costs more than the rest of this
+      # job combined, and without it the files are still written, linked, and openable in the web
+      # editor, just not shown inline.
+      - name: Extract the standalone Lean files
+        run: |
+          set -euo pipefail
+          lake env "$REFEREE_BIN" extract --data "$REFEREE_DATA" --output ./referee-site
+
+      # Interactive Lean — hover types, go-to-definition — on every code block the site renders,
+      # and by a wide margin the most expensive phase here: one Lean process per project module,
+      # each importing that module's Mathlib cone. 54 minutes of CPU over this library's 257
+      # modules, against 9 minutes for everything else put together. That is the whole reason it is
+      # a switch: set REFEREE_HIGHLIGHT to false and the site renders plain code instead, at a
+      # fraction of the time.
+      #
+      # It is *not* a lever on size, which is the intuitive but wrong reason to reach for it: the
+      # highlighting data is 381 MB on disk but only ~49 MB of it reaches the published site, which
+      # is 908 MB without this phase and 957 MB with it.
+      #
+      # `--jobs` is set rather than inherited because the default fans out one worker per CPU and
+      # each worker is a 1.5-3.5 GB process. Three is sized against the runner's 16 GB, not its
+      # four cores.
+      - name: Highlight the project modules
+        if: env.REFEREE_HIGHLIGHT == 'true'
+        run: |
+          set -euo pipefail
+          lake env "$REFEREE_BIN" highlight --data "$REFEREE_DATA" --output ./referee-site --jobs 3
+
+      - name: Render the referee site
         run: |
           set -euo pipefail
           # A baseline written by an older `collect` is rejected outright — the data file carries a
@@ -292,15 +328,6 @@ jobs:
             baseline=""
           fi
 
-          # `highlight-extracted` is deliberately skipped — it re-elaborates every extracted file
-          # and costs more than the rest of this job combined; without it the standalone files are
-          # still written and linked, just not rendered inline.
-          #
-          # `--jobs` is set rather than inherited: each highlight worker imports this library's
-          # Mathlib cone into a process of its own, and the default fans out one per CPU. Sized
-          # against the runner's memory, not its cores.
-          lake env "$REFEREE_BIN" extract --data "$REFEREE_DATA" --output ./referee-site
-          lake env "$REFEREE_BIN" highlight --data "$REFEREE_DATA" --output ./referee-site --jobs 2
           # `--trust mathlib` is an editorial claim, not a derived fact: it says whoever publishes
           # this site vouches for Mathlib and everything under it. Mathlib is this project's only
           # dependency, so it also happens to be the whole upstream — with it named, the trust page
@@ -329,9 +356,34 @@ jobs:
           path: ${{ env.REFEREE_DATA }}
           retention-days: 90
 
-      # The multi-page render is the site; `html-single` is the same content in one file and is not
-      # what `--site-url` names. Nothing else is published from this repository, so it deploys at
-      # the root of Pages rather than under a subdirectory.
+      # GitHub Pages supports published sites up to 1 GB; past that a deployment is not guaranteed
+      # to be served, and is likelier to exceed the ten-minute deployment timeout. This site is one
+      # page per declaration — 6300 of them, 957 MiB the first time it was built — which is 93% of
+      # that ceiling read as 2^30 bytes and just past it read as 10^9, and it grows with the
+      # library. The threshold below takes the forgiving reading, so the warning means "over on any
+      # reading"; the number is printed either way, so the margin stays visible while it is still a
+      # margin instead of being inferred from the deploy that finally fails.
+      #
+      # No flag here makes it appreciably smaller — nearly all of it is the declaration pages
+      # themselves. The levers are upstream (expose fewer declarations) or elsewhere (a host with
+      # no such limit).
+      - name: Report the site size
+        run: |
+          set -euo pipefail
+          bytes=$(du -sb referee-site/html-multi | cut -f1)
+          files=$(find referee-site/html-multi -type f | wc -l)
+          limit=$((1024 * 1024 * 1024))
+          echo "site: $((bytes / 1048576)) MiB across $files files — \
+            $((100 * bytes / limit))% of what GitHub Pages supports"
+          if [ "$bytes" -gt "$limit" ]; then
+            echo "::warning::the site is past the 1 GB GitHub Pages supports. It may deploy \
+              anyway; once it stops doing so, the site needs a host without that limit, because \
+              nothing in this workflow shrinks it appreciably."
+          fi
+
+      # `build-site` renders into `<output>/html-multi`, and that directory is the site root — the
+      # extracted files land inside it, and `--site-url` names it. Nothing else is published from
+      # this repository, so it deploys at the root of Pages rather than under a subdirectory.
       - name: Upload the website
         uses: actions/upload-pages-artifact@fc324d3547104276b827a68afc52ff2a11cc49c9 # v5.0.0
         with:
