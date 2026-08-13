@@ -189,3 +189,29 @@ import «Adic spaces».ScottishBook.Stated.Problem037
 import «Adic spaces».ScottishBook.Stated.Problem038
 import «Adic spaces».ScottishBook.Stated.Problem039
 import «Adic spaces».WP.Main
+-- Modules no other import reaches. Without these the files below build for nobody: they are
+-- outside `lake build`'s cone, so they are never compiled and never reach the referee site.
+-- Comparator/ stays out on purpose (Challenge.lean is all `sorry` by design), and two modules
+-- are left out because they do not compile — `PrimeExtensionClosed` (failed instance synthesis)
+-- and `WedhornStage2SpanExtractor` (`Function.mpr`), which between them block 12 more.
+import «Adic spaces».CechAcyclicityFull
+import «Adic spaces».CechRationalCover
+import «Adic spaces».CechRefinementCalculus
+import «Adic spaces».FJP.Milnor.StrictMilnorSquare
+import «Adic spaces».FJP.Over.ExamplePadic
+import «Adic spaces».FJP.Over.LaurentCompat
+import «Adic spaces».FJP.Over.StrongSheafy
+import «Adic spaces».FJP.RestrictedTruncation
+import «Adic spaces».FJP.StrongSheafy
+import «Adic spaces».WP.StrongSheafy
+import «Adic spaces».Wedhorn834C1SupplierLocalInterface
+import «Adic spaces».WedhornC1StrongSupplierBridge
+import «Adic spaces».WedhornC1StrongSupplierCore
+import «Adic spaces».WedhornC1SupplierLaurentAssembly
+import «Adic spaces».WedhornCor732PerTauUpperBoundResidual
+import «Adic spaces».WedhornDenominatorClearedCandidate
+import «Adic spaces».WedhornMPowerStructuralDataHonestFromCor732
+import «Adic spaces».WedhornNormalizedC1AssemblyStrong
+import «Adic spaces».WedhornOutsideRescue
+import «Adic spaces».WedhornSourceLaurentMembershipInLocalizationBase
+import «Adic spaces».WedhornValueGroupLocalizationStrictMono
