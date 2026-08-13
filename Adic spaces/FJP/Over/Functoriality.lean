@@ -8,6 +8,14 @@ import «Adic spaces».FJP.Over.UniformDomain
 import «Adic spaces».FJP.Over.Chart
 import «Adic spaces».FJP.FiniteJetFunctoriality
 
+-- Already what `lake build` uses — the lakefile sets it for the whole library — so this is a no-op
+-- for the build and states the dependency where it is actually needed. `bridgeLocHom_continuous`
+-- below is the one declaration in the library that does not elaborate at the default depth of 1:
+-- it times out at `whnf` after 200000 heartbeats, and everything downstream of it then fails on an
+-- unknown constant. That matters to any tool that elaborates this file without reading the
+-- lakefile, which is what `referee highlight` does.
+set_option maxSynthPendingDepth 3
+
 /-!
 # Functoriality layer over a CDVF base: pushing rational data along the square, graph
 bridges, and `HasLocLiftPowerBounded 𝓐`

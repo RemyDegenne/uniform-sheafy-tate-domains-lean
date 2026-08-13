@@ -74,10 +74,11 @@ jobs:
   referee:
     runs-on: ubuntu-latest
     name: Build and deploy the referee website
-    # Measured on a 32-core workstation against this library at 97cdc6d: `collect` 7m30s (serial),
-    # `extract` 11s, `highlight` 54 minutes of CPU over 257 modules, `build-site` 1m10s. The runner
-    # has four cores rather than thirty-two, so the highlight phase dominates, and this bound is
-    # here to notice a run heading for the six-hour job limit before GitHub kills it unlabelled.
+    # Measured on a 32-core workstation, with the root module importing all 386 modules that build:
+    # `collect` 9m51s (serial), `extract` 7s, `build-site` 2m. `highlight` was measured at 54
+    # minutes of CPU when the root reached only 257 modules, so budget half again as much now. The
+    # runner has four cores rather than thirty-two, so that phase dominates, and this bound is here
+    # to notice a run heading for the six-hour job limit before GitHub kills it unlabelled.
     timeout-minutes: 330
     environment:
       name: github-pages
@@ -295,23 +296,35 @@ jobs:
 
       # Interactive Lean — hover types, go-to-definition — on every code block the site renders,
       # and by a wide margin the most expensive phase here: one Lean process per project module,
-      # each importing that module's Mathlib cone. 54 minutes of CPU over this library's 257
-      # modules, against 9 minutes for everything else put together. That is the whole reason it is
-      # a switch: set REFEREE_HIGHLIGHT to false and the site renders plain code instead, at a
-      # fraction of the time.
+      # each importing that module's Mathlib cone. 54 minutes of CPU back when the root reached 257
+      # modules, against 9 minutes for everything else put together, and it now has 386 to get
+      # through. That is the whole reason it is a switch: set REFEREE_HIGHLIGHT to false and the
+      # site renders plain code instead, at a fraction of the time.
       #
-      # It is *not* a lever on size, which is the intuitive but wrong reason to reach for it: the
-      # highlighting data is 381 MB on disk but only ~49 MB of it reaches the published site, which
-      # is 908 MB without this phase and 957 MB with it.
+      # It is *not* a lever on size, which is the intuitive but wrong reason to reach for it: at
+      # 257 modules the highlighting data was 381 MB on disk but only ~49 MiB of it reached the
+      # published site — 908 MiB without this phase against 957 MiB with it.
       #
       # `--jobs` is set rather than inherited because the default fans out one worker per CPU and
       # each worker is a 1.5-3.5 GB process. Three is sized against the runner's 16 GB, not its
       # four cores.
+      # A failure here is deliberately not fatal. This phase re-elaborates each module in a fresh
+      # process that does not read the lakefile, so a module relying on the library's `leanOptions`
+      # fails here while building fine — which is exactly how run 31676632426 lost a finished site:
+      # one module of 379 threw at minute 60, after everything else had already succeeded, and the
+      # deploy never ran. `build-site` renders plain code for any module it finds no highlighting
+      # for, so the right response is to say what was missed and carry on with the site.
       - name: Highlight the project modules
         if: env.REFEREE_HIGHLIGHT == 'true'
         run: |
           set -euo pipefail
-          lake env "$REFEREE_BIN" highlight --data "$REFEREE_DATA" --output ./referee-site --jobs 3
+          if ! lake env "$REFEREE_BIN" highlight \
+               --data "$REFEREE_DATA" --output ./referee-site --jobs 3; then
+            done=$(find ./referee-site/highlighting -name '*.json' 2>/dev/null | wc -l)
+            echo "::warning::the highlight phase failed with $done modules written; those are \
+              rendered with interactive Lean and the rest as plain code. The site is still built \
+              and deployed."
+          fi
 
       - name: Render the referee site
         run: |
@@ -357,16 +370,17 @@ jobs:
           retention-days: 90
 
       # GitHub Pages supports published sites up to 1 GB; past that a deployment is not guaranteed
-      # to be served, and is likelier to exceed the ten-minute deployment timeout. This site is one
-      # page per declaration — 6300 of them, 957 MiB the first time it was built — which is 93% of
-      # that ceiling read as 2^30 bytes and just past it read as 10^9, and it grows with the
-      # library. The threshold below takes the forgiving reading, so the warning means "over on any
-      # reading"; the number is printed either way, so the margin stays visible while it is still a
-      # margin instead of being inferred from the deploy that finally fails.
+      # to be served, and is likelier to exceed the ten-minute deployment timeout. **This site is
+      # over that line**: one page per declaration, 7208 of them, measured at 1322 MiB before the
+      # highlighting phase and around 1.4 GiB with it — roughly 135% of the ceiling. So the warning
+      # below is expected to fire on every run, and is left in as the number to watch rather than
+      # as news.
       #
-      # No flag here makes it appreciably smaller — nearly all of it is the declaration pages
-      # themselves. The levers are upstream (expose fewer declarations) or elsewhere (a host with
-      # no such limit).
+      # It got there by wiring the 123 orphaned modules into the root: 5880 declarations became
+      # 7208 (+23%), and the site grew 46%, because every page carries a table of contents over all
+      # the others. Shrinking it again means exposing fewer declarations — the deploy is attempted
+      # regardless, because "not guaranteed" is not "refused", and a site that serves is worth more
+      # than a job that fails early to make a point.
       - name: Report the site size
         run: |
           set -euo pipefail
